@@ -33,40 +33,42 @@ def datasets(
         directory = Path(directory)
 
         # Get periodicity methods
-        if penn.METHOD == 'dio':
-            periodicity_fns = {}
-        elif penn.METHOD == 'pyin':
-            periodicity_fns = {'sum': penn.periodicity.sum}
-        else:
-            periodicity_fns = {
-                'entropy': penn.periodicity.entropy,
-                'max': penn.periodicity.max}
+        # if penn.METHOD == 'dio':
+        #     periodicity_fns = {}
+        # elif penn.METHOD == 'pyin':
+        #     periodicity_fns = {'sum': penn.periodicity.sum}
+        # elif penn.METHOD == 'yin':
+        #     periodicity_fns = {'sum': penn.periodicity.sum}
+        # else:
+        #     periodicity_fns = {
+        #         'entropy': penn.periodicity.entropy,
+        #         'max': penn.periodicity.max}
 
-        # Evaluate periodicity
-        periodicity_results = {}
-        for key, val in periodicity_fns.items():
-            periodicity_results[key] = periodicity_quality(
-                directory,
-                val,
-                datasets,
-                checkpoint=checkpoint,
-                gpu=gpu)
+        # # Evaluate periodicity
+        # periodicity_results = {}
+        # for key, val in periodicity_fns.items():
+        #     periodicity_results[key] = periodicity_quality(
+        #         directory,
+        #         val,
+        #         datasets,
+        #         checkpoint=checkpoint,
+        #         gpu=gpu)
 
-        # Write periodicity results
-        file = penn.EVAL_DIR / penn.CONFIG / 'periodicity.json'
-        with open(file, 'w') as file:
-            json.dump(periodicity_results, file, indent=4)
+        # # Write periodicity results
+        # file = penn.EVAL_DIR / penn.CONFIG / 'periodicity.json'
+        # with open(file, 'w') as file:
+        #     json.dump(periodicity_results, file, indent=4)
 
     # Perform benchmarking on CPU
-    benchmark_results = {'cpu': benchmark(datasets, checkpoint)}
+    # benchmark_results = {'cpu': benchmark(datasets, checkpoint)}
 
     # PYIN and DIO do not have GPU support
-    if penn.METHOD not in ['dio', 'pyin']:
-        benchmark_results ['gpu'] = benchmark(datasets, checkpoint, gpu)
+    # if penn.METHOD not in ['dio', 'pyin', 'yin', 'swipe']:
+    #     benchmark_results ['gpu'] = benchmark(datasets, checkpoint, gpu)
 
     # Write benchmarking information
-    with open(penn.EVAL_DIR / penn.CONFIG / 'time.json', 'w') as file:
-        json.dump(benchmark_results, file, indent=4)
+    # with open(penn.EVAL_DIR / penn.CONFIG / 'time.json', 'w') as file:
+    #     json.dump(benchmark_results, file, indent=4)
 
 
 ###############################################################################
@@ -142,6 +144,8 @@ def benchmark(
             penn.dsp.dio.from_files_to_files(files, output_prefixes)
         elif penn.METHOD == 'pyin':
             penn.dsp.pyin.from_files_to_files(files, output_prefixes)
+        elif penn.METHOD == 'yin':
+            penn.dsp.yin.from_files_to_files(files, output_prefixes)
 
         # Turn off benchmarking
         penn.BENCHMARK = False
@@ -239,7 +243,7 @@ def periodicity_quality(
 
                         # Infer independent probabilities for each pitch bin
                         batch_logits = torchcrepe.infer(
-                            frames.to(device))[:, :, None]
+                            frames.to(device), device=device)[:, :, None]
 
                         # Accumulate logits
                         logits.append(batch_logits)
@@ -253,6 +257,15 @@ def periodicity_quality(
 
                 # Infer
                 logits = penn.dsp.pyin.infer(audio[0])
+            
+            # elif penn.METHOD == 'yin':
+                    
+            #     # Pad
+            #     pad = (penn.WINDOW_SIZE - penn.HOPSIZE) // 2
+            #     audio = torch.nn.functional.pad(audio, (pad, pad))
+
+            #     # Infer
+            #     logits = penn.dsp.yin.infer(audio[0])
 
             # Save to temporary storage
             file = directory / dataset / f'{stem[0]}-logits.pt'
@@ -365,7 +378,7 @@ def periodicity_quality(
 
                     # Infer independent probabilities for each pitch bin
                     batch_logits = torchcrepe.infer(
-                        frames.to(device))[:, :, None]
+                        frames.to(device), device=device)[:, :, None]
 
                     # Accumulate logits
                     logits.append(batch_logits)
@@ -379,6 +392,15 @@ def periodicity_quality(
 
             # Infer
             logits = penn.dsp.pyin.infer(audio[0]).to(device)
+        
+        # elif penn.METHOD == 'yin':
+                    
+        #     # Pad
+        #     pad = (penn.WINDOW_SIZE - penn.HOPSIZE) // 2
+        #     audio = torch.nn.functional.pad(audio, (pad, pad))
+
+        #     # Infer
+        #     logits = penn.dsp.yin.infer(audio[0]).to(device)
 
         # Decode periodicity
         periodicity = periodicity_fn(logits).T
@@ -405,7 +427,7 @@ def pitch_quality(
 
     # Get metric class
     metric_fn = (
-        penn.evaluate.PitchMetrics if penn.METHOD == 'dio' else
+        penn.evaluate.PitchMetrics if penn.METHOD in {'dio', 'yin', 'swipe'} else
         penn.evaluate.Metrics)
 
     # Per-file metrics
@@ -457,11 +479,13 @@ def pitch_quality(
                     end = start + len(frames)
                     batch_bins = bins[:, start:end].to(device)
                     batch_pitch = pitch[:, start:end].to(device)
+                    # print(batch_pitch.shape)
                     batch_voiced = voiced[:, start:end].to(device)
 
                     # Infer
                     batch_logits = penn.infer(frames, checkpoint).detach()
-
+                    # print(batch_logits.get_device())
+                    # print(batch_logits.shape)
                     # Update metrics
                     args = (
                         batch_logits,
@@ -500,15 +524,16 @@ def pitch_quality(
                     for i, frames in enumerate(generator):
 
                         # Infer independent probabilities for each pitch bin
-                        batch_logits = torchcrepe.infer(frames.to(device))[:, :, None]
-
+                        batch_logits = torchcrepe.infer(frames.to(device), device=device)[:, :, None]
+                        # print(batch_logits.get_device())
+                        # print(batch_logits.shape)
                         # Slice features and copy to GPU
                         start = i * penn.EVALUATION_BATCH_SIZE
                         end = start + frames.shape[0]
                         batch_bins = bins[:, start:end].to(device)
                         batch_pitch = pitch[:, start:end].to(device)
+                        # print(batch_pitch.shape)
                         batch_voiced = voiced[:, start:end].to(device)
-
                         # Update metrics
                         args = (
                             batch_logits,
@@ -549,10 +574,41 @@ def pitch_quality(
 
                 # Update metrics
                 args = logits, bins, pitch, voiced
+                # print([x.shape for x in args])
                 file_metrics.update(*args)
                 dataset_metrics.update(*args)
                 aggregate_metrics.update(*args)
 
+            elif penn.METHOD == 'yin':      
+                # Pad
+                pad = (penn.WINDOW_SIZE - penn.HOPSIZE) // 2
+                audio = torch.nn.functional.pad(audio, (pad, pad))
+
+                # Infer
+                logits = penn.dsp.yin.infer(audio[0])
+
+                # Update metrics
+                args = logits,  pitch, voiced
+                file_metrics.update(*args)
+                dataset_metrics.update(*args)
+                aggregate_metrics.update(*args)
+            
+            elif penn.METHOD == 'swipe':      
+                # Pad
+                pad = (penn.WINDOW_SIZE - penn.HOPSIZE) // 2
+                audio = torch.nn.functional.pad(audio, (pad, pad))
+
+                # Infer
+                predicted = penn.dsp.swipe.from_audio(audio[0])
+                # Repeat the last value to match the length of pitch
+                if predicted.shape[1] < pitch.shape[1]:
+                    predicted = torch.cat([predicted, predicted[:, -1:]], dim=1)
+                    
+                # Update metrics
+                args = predicted, pitch, voiced
+                file_metrics.update(*args)
+                dataset_metrics.update(*args)
+                aggregate_metrics.update(*args)
             # Copy results
             granular[f'{dataset}/{stem[0]}'] = file_metrics()
         overall[dataset] = dataset_metrics()

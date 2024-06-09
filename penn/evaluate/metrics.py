@@ -38,14 +38,17 @@ class Metrics:
     def update(self, logits, bins, target, voiced):
         # Detach from graph
         logits = logits.detach()
-
+        # print(f"Logits shape: {logits.shape}")
+        # print(f"Bins shape: {bins.shape}")
+        # print(f"Target shape: {target.shape}")
+        # print(f"Voiced shape: {voiced.shape}")
         # Update loss
         self.loss.update(logits[:, :penn.PITCH_BINS], bins.T)
 
         # Decode bins, pitch, and periodicity
         with torchutil.time.context('decode'):
             predicted, pitch, periodicity = penn.postprocess(logits)
-
+            # print(predicted.shape, pitch.shape, periodicity.shape)
         # Update bin accuracy
         self.accuracy.update(predicted[voiced], bins[voiced])
 
@@ -79,6 +82,8 @@ class PitchMetrics:
 
     def update(self, pitch, target, voiced):
         # Mask unvoiced
+        # print(pitch[:, :10])
+        # print(pitch.shape, target.shape, voiced.shape)
         pitch, target = pitch[voiced], target[voiced]
 
         # Update metrics
@@ -132,12 +137,17 @@ class F1:
         return result
 
     def update(self, periodicity, voiced):
+        # Debug: Print shapes
+        # print(f"Periodicity shape: {periodicity.shape}")
+        # print(f"Voiced shape: {voiced.shape}")
         for threshold, precision, recall in zip(
             self.thresholds,
             self.precision,
             self.recall
         ):
             predicted = penn.voicing.threshold(periodicity, threshold)
+            # Debug: Print predicted shape
+            # print(f"Predicted shape: {predicted.shape}")
             precision.update(predicted, voiced)
             recall.update(predicted, voiced)
 

@@ -18,8 +18,8 @@ BATCH_SIZE = 32
 CENTS_PER_BIN = 20.  # cents
 
 # The decoder to use for postprocessing
-DECODER = 'argmax'
-
+# DECODER = 'argmax'
+DECODER = 'viterbi'
 # The dropout rate. Set to None to turn off dropout.
 DROPOUT = .25
 
@@ -30,8 +30,8 @@ EARLY_STOPPING = True
 FMIN = torchcrepe.convert.cents_to_frequency(1997.3794084376191)
 
 # Distance between adjacent frames
-HOPSIZE = 160  # samples
-
+# HOPSIZE = 160  # samples
+HOPSIZE = 80  # samples
 # Number of steps between logging to Tensorboard
 LOG_INTERVAL = 500  # steps
 

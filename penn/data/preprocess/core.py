@@ -115,8 +115,10 @@ def mdb():
 
 def ptdb():
     """Preprocessing ptdb dataset"""
+    print("Preprocessing ptdb...")
     # Get audio files
     directory = penn.DATA_DIR / 'ptdb' / 'SPEECH DATA'
+    print(directory)
     male = (directory / 'MALE' / 'MIC').rglob('*.wav')
     female = (directory / 'FEMALE' / 'MIC').rglob('*.wav')
     audio_files = sorted(itertools.chain(male, female))
@@ -132,7 +134,7 @@ def ptdb():
     # Create cache
     output_directory = penn.CACHE_DIR / 'ptdb'
     output_directory.mkdir(exist_ok=True, parents=True)
-
+    print(output_directory)
     # Write audio and pitch to cache
     for i, (audio_file, pitch_file) in torchutil.iterator(
         enumerate(zip(audio_files, pitch_files)),
@@ -140,19 +142,21 @@ def ptdb():
         total=len(audio_files)
     ):
         stem = f'{i:06d}'
-
         # Load and resample to PTDB sample rate
         audio, sample_rate = torchaudio.load(audio_file)
+        # print("audio shape: ", audio.shape)
+        # print("PTDB_SAMPLE_RATE: ", PTDB_SAMPLE_RATE)
         audio = penn.resample(audio, sample_rate, PTDB_SAMPLE_RATE)
-
+        # print("audio shape after resampling: ", audio.shape)
         # Remove padding
         offset = PTDB_WINDOW_SIZE - PTDB_HOPSIZE // 2
         if (audio.shape[-1] - 2 * offset) % PTDB_HOPSIZE == 0:
             offset += PTDB_HOPSIZE // 2
         audio = audio[:, offset:-offset]
-
+        # print("audio shape after removing padding: ", audio.shape)
         # Resample to pitch estimation sample rate
         audio = penn.resample(audio, PTDB_SAMPLE_RATE)
+        # print("audio shape after resampling to pitch estimation sample rate: ", audio.shape)
 
         # Save as numpy array for fast memory-mapped read
         np.save(
@@ -173,7 +177,8 @@ def ptdb():
 
         # Get target number of frames
         frames = penn.convert.samples_to_frames(audio.shape[-1])
-
+        # print("frames shape by penn convert: ", frames)
+        # exit()
         # Get original times
         times = PTDB_HOPSIZE_SECONDS * np.arange(0, len(pitch))
         times += PTDB_HOPSIZE_SECONDS / 2

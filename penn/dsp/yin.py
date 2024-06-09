@@ -1,6 +1,6 @@
 import functools
 import multiprocessing as mp
-
+import numba
 import numpy as np
 import torch
 import torchutil
@@ -19,7 +19,7 @@ def from_audio(
     hopsize=penn.HOPSIZE_SECONDS,
     fmin=penn.FMIN,
     fmax=penn.FMAX):
-    """Estimate pitch and periodicity with pyin"""
+    """Estimate pitch with yin"""
     # Pad
     pad = int(
         penn.WINDOW_SIZE - penn.convert.seconds_to_samples(hopsize)) // 2
@@ -145,6 +145,7 @@ def infer(
     audio,
     sample_rate=penn.SAMPLE_RATE,
     hopsize=penn.HOPSIZE_SECONDS,
+    trough_threshold: float = 0.1,
     fmin=penn.FMIN,
     fmax=penn.FMAX):
     hopsize = int(penn.convert.seconds_to_samples(hopsize))
@@ -185,30 +186,43 @@ def infer(
     # Parabolic interpolation
     parabolic_shifts = parabolic_interpolation(yin_frames)
 
-    # Find Yin candidates and probabilities.
-    # The implementation here follows the official pYIN software which
-    # differs from the method described in the paper.
-    # 1. Define the prior over the thresholds.
-    thresholds = np.linspace(0, 1, 100 + 1)
-    beta_cdf = scipy.stats.beta.cdf(thresholds, 2, 18)
-    beta_probs = np.diff(beta_cdf)
+    # Find local minima.
+    is_trough = localmin(yin_frames, axis=-2)
+    is_trough[..., 0, :] = yin_frames[..., 0, :] < yin_frames[..., 1, :]
 
-    def _helper(a, b):
-        return pyin_helper(
-            a,
-            b,
-            thresholds,
-            2,
-            beta_probs,
-            .01,
-            min_period,
-            (penn.OCTAVE / 12) / penn.CENTS_PER_BIN)
+    # Find minima below peak threshold.
+    is_threshold_trough = np.logical_and(is_trough, yin_frames < trough_threshold)
 
-    helper = np.vectorize(_helper, signature="(f,t),(k,t)->(1,d,t)")
-    probs = helper(yin_frames, parabolic_shifts)
-    probs = torch.from_numpy(probs)
+    # Absolute threshold.
+    # "The solution we propose is to set an absolute threshold and choose the
+    # smallest value of tau that gives a minimum of d' deeper than
+    # this threshold. If none is found, the global minimum is chosen instead."
+    target_shape = list(yin_frames.shape)
+    target_shape[-2] = 1
+
+    global_min = np.argmin(yin_frames, axis=-2)
+    yin_period = np.argmax(is_threshold_trough, axis=-2)
+
+    global_min = global_min.reshape(target_shape)
+    yin_period = yin_period.reshape(target_shape)
+
+    no_trough_below_threshold = np.all(~is_threshold_trough, axis=-2, keepdims=True)
+    yin_period[no_trough_below_threshold] = global_min[no_trough_below_threshold]
+
+    # Refine peak by parabolic interpolation.
+
+    yin_period = (
+        min_period
+        + yin_period
+        + np.take_along_axis(parabolic_shifts, yin_period, axis=-2)
+    )[..., 0, :]
+
+    # Convert period to fundamental frequency.
+    f0: np.ndarray = sample_rate / yin_period
+
+    f0 = torch.from_numpy(f0)
     # print(probs.shape)
-    return torch.log(probs).permute(2, 1, 0)
+    return f0[None]
 
 
 def parabolic_interpolation(frames):
@@ -228,80 +242,86 @@ def parabolic_interpolation(frames):
     return parabolic_shifts
 
 
-def pyin_helper(
-        frames,
-        parabolic_shifts,
-        thresholds,
-        boltzmann_parameter,
-        beta_probs,
-        no_trough_prob,
-        min_period,
-        n_bins_per_semitone):
-    import librosa
-    import scipy
+@numba.stencil
+def _localmin_sten(x):  # pragma: no cover
+    """Numba stencil for local minima computation"""
+    return (x[0] < x[-1]) & (x[0] <= x[1])
+
+def localmin(x: np.ndarray, *, axis: int = 0) -> np.ndarray:
+    """Find local minima in an array
+
+    An element ``x[i]`` is considered a local minimum if the following
+    conditions are met:
+
+    - ``x[i] < x[i-1]``
+    - ``x[i] <= x[i+1]``
+
+    Note that the first condition is strict, and that the first element
+    ``x[0]`` will never be considered as a local minimum.
+
+    Examples
+    --------
+    >>> x = np.array([1, 0, 1, 2, -1, 0, -2, 1])
+    >>> librosa.util.localmin(x)
+    array([False,  True, False, False,  True, False,  True, False])
+
+    >>> # Two-dimensional example
+    >>> x = np.array([[1,0,1], [2, -1, 0], [2, 1, 3]])
+    >>> librosa.util.localmin(x, axis=0)
+    array([[False, False, False],
+           [False,  True,  True],
+           [False, False, False]])
+
+    >>> librosa.util.localmin(x, axis=1)
+    array([[False,  True, False],
+           [False,  True, False],
+           [False,  True, False]])
+
+    Parameters
+    ----------
+    x : np.ndarray [shape=(d1,d2,...)]
+        input vector or array
+    axis : int
+        axis along which to compute local minimality
+
+    Returns
+    -------
+    m : np.ndarray [shape=x.shape, dtype=bool]
+        indicator array of local minimality along ``axis``
+
+    See Also
+    --------
+    localmax
+    """
+    # Rotate the target axis to the end
+    xi = x.swapaxes(-1, axis)
+
+    # Allocate the output array and rotate target axis
+    lmin = np.empty_like(x, dtype=bool)
+    lmini = lmin.swapaxes(-1, axis)
+
+    # Call the vectorized stencil
+    _localmin(xi, lmini)
+
+    # Handle the edge condition not covered by the stencil
+    lmini[..., -1] = xi[..., -1] < xi[..., -2]
+
+    return lmin
+
+@numba.guvectorize(
+    [
+        "void(int16[:], bool_[:])",
+        "void(int32[:], bool_[:])",
+        "void(int64[:], bool_[:])",
+        "void(float32[:], bool_[:])",
+        "void(float64[:], bool_[:])",
+    ],
+    "(n)->(n)",
+    cache=True,
+    nopython=True,
+)
+def _localmin(x, y):  # pragma: no cover
+    """Vectorized wrapper for the localmin stencil"""
+    y[:] = _localmin_sten(x)
 
 
-    yin_probs = np.zeros_like(frames)
-
-    for i, yin_frame in enumerate(frames.T):
-        # 2. For each frame find the troughs.
-        is_trough = librosa.util.localmin(yin_frame)
-
-        is_trough[0] = yin_frame[0] < yin_frame[1]
-        (trough_index,) = np.nonzero(is_trough)
-
-        if len(trough_index) == 0:
-            continue
-
-        # 3. Find the troughs below each threshold.
-        # these are the local minima of the frame, could get them directly
-        # without the trough index
-        trough_heights = yin_frame[trough_index]
-        trough_thresholds = np.less.outer(trough_heights, thresholds[1:])
-
-        # 4. Define the prior over the troughs.
-        # Smaller periods are weighted more.
-        trough_positions = np.cumsum(trough_thresholds, axis=0) - 1
-        n_troughs = np.count_nonzero(trough_thresholds, axis=0)
-
-        trough_prior = scipy.stats.boltzmann.pmf(
-            trough_positions,
-            boltzmann_parameter,
-            n_troughs)
-
-        trough_prior[~trough_thresholds] = 0
-
-        # 5. For each threshold add probability to global minimum if no trough
-        # is below threshold, else add probability to each trough below
-        # threshold biased by prior.
-        probs = trough_prior.dot(beta_probs)
-
-        global_min = np.argmin(trough_heights)
-        n_thresholds_below_min = np.count_nonzero(
-            ~trough_thresholds[global_min, :])
-        probs[global_min] += no_trough_prob * np.sum(
-            beta_probs[:n_thresholds_below_min])
-
-        yin_probs[trough_index, i] = probs
-
-    yin_period, frame_index = np.nonzero(yin_probs)
-
-    # Refine peak by parabolic interpolation.
-    period_candidates = min_period + yin_period
-    period_candidates = period_candidates + \
-        parabolic_shifts[yin_period, frame_index]
-    f0_candidates = penn.SAMPLE_RATE / period_candidates
-
-    # Find pitch bin corresponding to each f0 candidate.
-    bin_index = 12 * n_bins_per_semitone * np.log2(f0_candidates / penn.FMIN)
-    bin_index = np.clip(
-        np.round(bin_index),
-        0,
-        penn.PITCH_BINS - 1).astype(int)
-
-    # Observation probabilities.
-    observation_probs = np.zeros((penn.PITCH_BINS, frames.shape[1]))
-    observation_probs[bin_index, frame_index] = \
-        yin_probs[yin_period, frame_index]
-
-    return observation_probs[np.newaxis]

@@ -27,6 +27,7 @@ FMIN = 31.  # Hz
 
 # Distance between adjacent frames
 HOPSIZE = 80  # samples
+# HOPSIZE = 160  # samples
 
 # The size of the window used for locally normal pitch decoding
 LOCAL_PITCH_WINDOW_SIZE = 19
@@ -63,10 +64,9 @@ ASSETS_DIR = Path(__file__).parent.parent / 'assets'
 
 # Location of preprocessed features
 CACHE_DIR = Path(__file__).parent.parent.parent / 'data' / 'cache'
-
+# CACHE_DIR = Path(__file__).parent.parent.parent / 'data' / 'cache_160'
 # Location of datasets on disk
 DATA_DIR = Path(__file__).parent.parent.parent / 'data' / 'datasets'
-
 # Location to save evaluation artifacts
 EVAL_DIR = Path(__file__).parent.parent.parent / 'eval'
 
@@ -89,8 +89,8 @@ BENCHMARK = False
 CHECKPOINT_INTERVAL = 25000  # steps
 
 # List of all datasets
-DATASETS = ['mdb', 'ptdb']
-
+# DATASETS = ['mdb', 'ptdb']
+DATASETS = ['ptdb']
 # Method to use for evaluation
 METHOD = 'penn'
 

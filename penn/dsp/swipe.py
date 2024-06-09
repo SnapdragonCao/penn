@@ -9,7 +9,7 @@ import penn
 
 
 ###############################################################################
-# DIO (from pyworld)
+# SWIPE (from pysptk)
 ###############################################################################
 
 
@@ -17,34 +17,29 @@ def from_audio(
     audio,
     sample_rate=penn.SAMPLE_RATE,
     hopsize=penn.HOPSIZE_SECONDS,
+    threshold=0.3,
     fmin=penn.FMIN,
     fmax=penn.FMAX):
     """Estimate pitch and periodicity with dio"""
     with torchutil.time.context('infer'):
 
-        import pyworld
+        import pysptk
 
         # Convert to numpy
         audio = audio.numpy().squeeze().astype(np.float64)
-
         # Get pitch
-        pitch, times  = pyworld.dio(
+        pitch  = pysptk.swipe(
             audio[penn.WINDOW_SIZE // 2:-penn.WINDOW_SIZE // 2],
             sample_rate,
-            fmin,
-            fmax,
-            frame_period=1000 * hopsize)
+            hopsize=penn.convert.seconds_to_samples(hopsize),
+            threshold=threshold,
+            min=fmin,
+            max=fmax,
+            )
 
-        # Refine pitch
-        pitch = pyworld.stonemask(
-            audio,
-            pitch,
-            times,
-            sample_rate)
 
         # Interpolate unvoiced tokens
         pitch, _ = penn.data.preprocess.interpolate_unvoiced(pitch)
-
         # Convert to torch
         return torch.from_numpy(pitch)[None]
 

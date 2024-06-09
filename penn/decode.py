@@ -23,7 +23,7 @@ def argmax(logits):
 def viterbi(logits):
     """Decode pitch using viterbi decoding (from librosa)"""
     import librosa
-
+    device = "cpu" if logits.get_device() == -1 else f"cuda:{logits.get_device()}"
     # Normalize and convert to numpy
     if penn.METHOD == 'pyin':
         periodicity = penn.periodicity.sum(logits).T
@@ -100,7 +100,7 @@ def viterbi(logits):
         pitch = penn.data.preprocess.interpolate_unvoiced(pitch.numpy())[0]
         pitch = torch.from_numpy(pitch)
 
-    return bins.T, pitch.T
+    return bins.T.to(device), pitch.T.to(device)
 
 
 def local_expected_value(logits, window=penn.LOCAL_PITCH_WINDOW_SIZE):

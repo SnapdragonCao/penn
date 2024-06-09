@@ -462,7 +462,11 @@ def postprocess(logits, fmin=penn.FMIN, fmax=penn.FMAX):
         if penn.DECODER == 'argmax':
             bins, pitch = penn.decode.argmax(logits)
         elif penn.DECODER.startswith('viterbi'):
-            bins, pitch = penn.decode.viterbi(logits)
+            if penn.METHOD == 'torchcrepe':
+                import torchcrepe
+                bins, pitch = torchcrepe.decode.viterbi(logits)
+            else:
+                bins, pitch = penn.decode.viterbi(logits)
         elif penn.DECODER == 'local_expected_value':
             bins, pitch = penn.decode.local_expected_value(logits)
         else:
@@ -700,7 +704,7 @@ class InferenceSampler(torch.utils.data.Sampler):
 
 def cents(a, b):
     """Compute pitch difference in cents"""
-    return penn.OCTAVE * torch.log2(a / b)
+    return penn.OCTAVE * torch.log2(a / (2 *b))
 
 
 def expected_frames(samples, sample_rate, hopsize, center):
